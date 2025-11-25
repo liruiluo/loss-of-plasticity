@@ -1,7 +1,7 @@
 import argparse
 import os
 import pickle
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 
@@ -44,39 +44,48 @@ def parse_args():
         "--steps",
         type=int,
         default=1_000_000,
-        help="Environment step budget (e.g., 1_000_000) for computing success rate.",
+        help="Environment step budget (e.g., 1_000_000) for computing metrics.",
     )
     return parser.parse_args()
 
 
-def load_run_success_rate(path: str, step_limit: int) -> float:
+def load_run_metrics(path: str, step_limit: int) -> Tuple[float, float]:
     """
-    Loads a single run file and computes success rate up to step_limit.
+    Loads a single run file and computes success rate and average return
+    up to step_limit.
+
     success_rate = mean(successes for episodes whose termination_step <= step_limit)
+    avg_return   = mean(episode_returns for episodes whose termination_step <= step_limit)
     """
     if not os.path.isfile(path):
-        return None
+        return None, None
 
     with open(path, "rb") as f:
         data = pickle.load(f)
 
     term_steps = np.asarray(data.get("termination_steps", []), dtype=np.int64)
     successes = data.get("successes", None)
-    if successes is None:
-        return None
-    successes = np.asarray(successes, dtype=np.float32)
+    rets = data.get("rets", None)
 
-    if term_steps.shape[0] == 0 or successes.shape[0] == 0:
-        return None
-    n = min(term_steps.shape[0], successes.shape[0])
+    if successes is None or rets is None:
+        return None, None
+
+    successes = np.asarray(successes, dtype=np.float32)
+    rets = np.asarray(rets, dtype=np.float32)
+
+    if term_steps.shape[0] == 0 or successes.shape[0] == 0 or rets.shape[0] == 0:
+        return None, None
+
+    n = min(term_steps.shape[0], successes.shape[0], rets.shape[0])
     term_steps = term_steps[:n]
     successes = successes[:n]
+    rets = rets[:n]
 
     mask = term_steps <= step_limit
     if not np.any(mask):
-        return None
+        return None, None
 
-    return float(successes[mask].mean())
+    return float(successes[mask].mean()), float(rets[mask].mean())
 
 
 def main():
@@ -86,8 +95,10 @@ def main():
     seeds: List[int] = [int(s) for s in args.seeds.split(",") if s.strip()]
     step_limit = args.steps
 
-    per_task_means = []
-    per_task_stds = []
+    per_task_succ_means = []
+    per_task_succ_stds = []
+    per_task_ret_means = []
+    per_task_ret_stds = []
 
     print(f"Analyzing MetaWorld results in '{base_dir}' up to {step_limit} steps.")
     print(f"Tasks: {tasks}")
@@ -96,38 +107,57 @@ def main():
 
     for task in tasks:
         task_dir = os.path.join(base_dir, task)
-        rates = []
+        succ_rates = []
+        avg_rets = []
         for seed in seeds:
             run_path = os.path.join(task_dir, f"{seed}.log")
-            rate = load_run_success_rate(run_path, step_limit=step_limit)
-            if rate is not None:
-                rates.append(rate)
+            succ, ret = load_run_metrics(run_path, step_limit=step_limit)
+            if succ is not None and ret is not None:
+                succ_rates.append(succ)
+                avg_rets.append(ret)
 
-        if len(rates) == 0:
+        if len(succ_rates) == 0:
             print(f"{task:20s} -> no valid runs found")
             continue
 
-        rates = np.asarray(rates, dtype=np.float32)
-        mean_rate = float(rates.mean())
-        std_rate = float(rates.std())
-        per_task_means.append(mean_rate)
-        per_task_stds.append(std_rate)
+        succ_rates = np.asarray(succ_rates, dtype=np.float32)
+        avg_rets = np.asarray(avg_rets, dtype=np.float32)
 
-        print(f"{task:20s} mean={mean_rate:.3f}  std={std_rate:.3f}  (n={len(rates)})")
+        succ_mean = float(succ_rates.mean())
+        succ_std = float(succ_rates.std())
+        ret_mean = float(avg_rets.mean())
+        ret_std = float(avg_rets.std())
 
-    if len(per_task_means) == 0:
+        per_task_succ_means.append(succ_mean)
+        per_task_succ_stds.append(succ_std)
+        per_task_ret_means.append(ret_mean)
+        per_task_ret_stds.append(ret_std)
+
+        print(
+            f"{task:20s} "
+            f"succ_mean={succ_mean:.3f} succ_std={succ_std:.3f} "
+            f"ret_mean={ret_mean:.1f} ret_std={ret_std:.1f} (n={len(succ_rates)})"
+        )
+
+    if len(per_task_succ_means) == 0:
         print("\nNo tasks with valid data. Nothing to summarize.")
         return
 
-    per_task_means = np.asarray(per_task_means, dtype=np.float32)
-    per_task_stds = np.asarray(per_task_stds, dtype=np.float32)
+    per_task_succ_means = np.asarray(per_task_succ_means, dtype=np.float32)
+    per_task_succ_stds = np.asarray(per_task_succ_stds, dtype=np.float32)
+    per_task_ret_means = np.asarray(per_task_ret_means, dtype=np.float32)
+    per_task_ret_stds = np.asarray(per_task_ret_stds, dtype=np.float32)
 
-    overall_mean_of_means = float(per_task_means.mean())
-    overall_mean_of_stds = float(per_task_stds.mean())
+    overall_succ_mean = float(per_task_succ_means.mean())
+    overall_succ_std_mean = float(per_task_succ_stds.mean())
+    overall_ret_mean = float(per_task_ret_means.mean())
+    overall_ret_std_mean = float(per_task_ret_stds.mean())
 
     print("\nSummary over tasks:")
-    print(f"Mean of per-task means      = {overall_mean_of_means:.3f}")
-    print(f"Mean of per-task stds       = {overall_mean_of_stds:.3f}")
+    print(f"Mean of per-task success means    = {overall_succ_mean:.3f}")
+    print(f"Mean of per-task success stds     = {overall_succ_std_mean:.3f}")
+    print(f"Mean of per-task return means     = {overall_ret_mean:.1f}")
+    print(f"Mean of per-task return stds      = {overall_ret_std_mean:.1f}")
 
 
 if __name__ == "__main__":

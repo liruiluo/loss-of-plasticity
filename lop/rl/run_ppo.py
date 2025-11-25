@@ -137,6 +137,9 @@ def main():
             raise ValueError(f"Unknown MetaWorld environment id: {env_name}")
         env_cls = ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE[env_name]
         base_env = env_cls()
+        # Ensure task randomization is not frozen
+        if hasattr(base_env, "_freeze_rand_vec"):
+            base_env._freeze_rand_vec = False
 
         class GymCompatEnv:
             def __init__(self, wrapped_env, seed_value=None):
