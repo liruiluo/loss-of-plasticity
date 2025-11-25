@@ -8,8 +8,6 @@ import numpy as np
 import gym
 import torch
 from torch.optim import Adam
-
-import lop.envs
 from lop.algos.rl.buffer import Buffer
 from lop.nets.policies import MLPPolicy
 from lop.nets.valuefs import MLPVF
@@ -20,7 +18,10 @@ from lop.utils.miscellaneous import compute_matrix_rank_summaries
 
 def save_data(cfg, rets, termination_steps,
               pol_features_activity, stable_rank, mu, pol_weights, val_weights,
-              action_probs=None, weight_change=[], friction=-1.0, num_updates=0, previous_change_time=0):
+              action_probs=None, weight_change=None, friction=-1.0, num_updates=0,
+              previous_change_time=0, successes=None):
+    if weight_change is None:
+        weight_change = []
     data_dict = {
         'rets': np.array(rets),
         'termination_steps': np.array(termination_steps),
@@ -33,7 +34,8 @@ def save_data(cfg, rets, termination_steps,
         'weight_change': torch.tensor(weight_change).numpy(),
         'friction': friction,
         'num_updates': num_updates,
-        'previous_change_time': previous_change_time
+        'previous_change_time': previous_change_time,
+        'successes': None if successes is None else np.array(successes, dtype=np.float32),
     }
     with open(cfg['log_path'], 'wb') as f:
         pickle.dump(data_dict, f, pickle.HIGHEST_PROTOCOL)
@@ -98,6 +100,7 @@ def main():
     cfg.setdefault('no_clipping', False)
     cfg.setdefault('loss_type', 'ppo')
     cfg.setdefault('frictions_file', 'cfg/frictions')
+    cfg.setdefault('env_type', 'gym')
     cfg.setdefault('max_grad_norm', 1e9)
     cfg.setdefault('perturb_scale', 0)
     cfg['n_steps'] = int(float(cfg['n_steps']))
@@ -120,7 +123,50 @@ def main():
     # Initialize env
     seed = cfg['seed']
     friction = -1.0
-    if cfg['env_name'] in ['SlipperyAnt-v2', 'SlipperyAnt-v3']:
+    env_name = cfg['env_name']
+    env_type = cfg.get('env_type', 'gym')
+
+    if env_type == 'metaworld':
+        # MetaWorld environments use the Gymnasium-style
+        # (obs, reward, terminated, truncated, info) API. Construct the
+        # environment from MetaWorld's registry and wrap it to match the
+        # older Gym interface expected in this script.
+        from metaworld import ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE
+
+        if env_name not in ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE:
+            raise ValueError(f"Unknown MetaWorld environment id: {env_name}")
+        env_cls = ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE[env_name]
+        base_env = env_cls()
+
+        class GymCompatEnv:
+            def __init__(self, wrapped_env, seed_value=None):
+                self.env = wrapped_env
+                self.observation_space = wrapped_env.observation_space
+                self.action_space = wrapped_env.action_space
+                self._seed = seed_value
+                self._reset_called = False
+
+            def reset(self):
+                # For reproducibility, only pass the seed on the first reset.
+                if not self._reset_called and self._seed is not None:
+                    obs, _ = self.env.reset(seed=self._seed)
+                    self._reset_called = True
+                else:
+                    obs, _ = self.env.reset()
+                return obs
+
+            def step(self, action):
+                obs, reward, terminated, truncated, info = self.env.step(action)
+                done = bool(terminated or truncated)
+                return obs, reward, done, info
+
+            def close(self):
+                return self.env.close()
+
+        env = GymCompatEnv(base_env, seed_value=seed)
+    elif env_name in ['SlipperyAnt-v2', 'SlipperyAnt-v3']:
+        # Import only when needed to avoid unnecessary mujoco_py build
+        import lop.envs  # noqa: F401
         xml_file = os.path.abspath(cfg['dir'] + f'slippery_ant_{seed}.xml')
         cfg.setdefault('friction', [0.02, 2])
         cfg.setdefault('change_time', int(2e6))
@@ -132,10 +178,10 @@ def main():
 
         if friction < 0: # If no saved friction, use the default value 1.0
             friction = 1.0
-        env = gym.make(cfg['env_name'], friction=new_friction, xml_file=xml_file)
+        env = gym.make(env_name, friction=new_friction, xml_file=xml_file)
         print(f'Initial friction: {friction:.6f}')
     else:
-        env = gym.make(cfg['env_name'])
+        env = gym.make(env_name)
     env.name = None
 
     # Set random seeds
@@ -205,11 +251,13 @@ def main():
         if 'val_weights' in to_log:
             val_weights = np.array(val_weights)
         weight_change = data_dict['weight_change']
+        successes = list(data_dict.get('successes', []))
     else:
         num_updates = 0
         previous_change_time = 0
         rets, termination_steps = [], []
         mu, weight_change, pol_features_activity, stable_rank, pol_weights, val_weights = [], [], [], [], [], []
+        successes = []
         if 'mu' in to_log:
             mu = np.ones(size=(n_steps, a_dim))
         if 'pol_weights' in to_log:
@@ -259,6 +307,11 @@ def main():
             # print(step, "(", epi_steps, ") {0:.2f}".format(ret))
             rets.append(ret)
             termination_steps.append(step)
+            # Record episode-level success when available in info dict
+            if isinstance(infos, dict):
+                successes.append(float(infos.get('success', 0.0)))
+            else:
+                successes.append(0.0)
             ret = 0
             epi_steps = 0
             if cfg['env_name'] in ['SlipperyAnt-v2', 'SlipperyAnt-v3'] and step - previous_change_time > cfg['change_time']:
@@ -280,7 +333,7 @@ def main():
             save_data(cfg=cfg, rets=rets, termination_steps=termination_steps,
                       pol_features_activity=pol_features_activity, stable_rank=stable_rank, mu=mu, pol_weights=pol_weights,
                       val_weights=val_weights, weight_change=weight_change, friction=friction,
-                      num_updates=num_updates, previous_change_time=previous_change_time)
+                      num_updates=num_updates, previous_change_time=previous_change_time, successes=successes)
 
     with open(cfg['done_path'], 'w') as f:
         f.write('All done!')
