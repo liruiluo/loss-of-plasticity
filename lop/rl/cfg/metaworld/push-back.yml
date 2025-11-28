@@ -13,6 +13,7 @@ h_dim: [256, 256, 256]
 u_adv_scl: 1
 clip_eps: 0.2
 max_grad_norm: 0.5
+vf_coef: 0.5
 ob_norm: 0
 rew_norm: 0
 dir: 'data/metaworld/push-back/'

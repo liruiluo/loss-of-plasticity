@@ -119,6 +119,7 @@ def main():
     cfg.setdefault('util_type_pol', 'contribution')
     cfg.setdefault('pgnt', (cfg['rr']>0) or cfg['redo'])
     cfg.setdefault('vgnt', (cfg['rr']>0) or cfg['redo'])
+    cfg.setdefault('vf_coef', 1.0)
 
     # Initialize env
     seed = cfg['seed']
@@ -207,7 +208,7 @@ def main():
     learner = PPO(pol, buf, cfg['lr'], g=cfg['g'], vf=vf, lm=cfg['lm'], Opt=opt,
                   u_epi_up=cfg['u_epi_ups'], device=device, n_itrs=cfg['n_itrs'], n_slices=cfg['n_slices'],
                   u_adv_scl=cfg['u_adv_scl'], clip_eps=cfg['clip_eps'],
-                  max_grad_norm=cfg['max_grad_norm'], init=cfg['init'],
+                  max_grad_norm=cfg['max_grad_norm'], vf_coef=cfg['vf_coef'], init=cfg['init'],
                   wd=float(cfg['wd']),
                   betas=(cfg['beta_1'], cfg['beta_2']), eps=float(cfg['eps']), no_clipping=cfg['no_clipping'],
                   loss_type=cfg['loss_type'], perturb_scale=cfg['perturb_scale'],

@@ -20,6 +20,7 @@ class PPO(Learner):
                  u_adv_scl=1,  # scale return with mean and std
                  clip_eps=0.2,
                  max_grad_norm=int(1e9),  # maximum gradient norm for clip_grad_norm
+                 vf_coef=1.0,
                  util_type_val='contribution',
                  util_type_pol='contribution',
                  replacement_rate=1e-4,
@@ -51,6 +52,7 @@ class PPO(Learner):
         self.u_adv_scl = u_adv_scl
         self.clip_eps = clip_eps
         self.max_grad_norm = max_grad_norm
+        self.vf_coef = vf_coef
         self.vgnt = vgnt
         self.pgnt = pgnt
         self.perturb_scale = perturb_scale
@@ -139,7 +141,7 @@ class PPO(Learner):
                 vals = self.vf.value(os[ind], to_log_features=True)
                 v_loss = (v_rets[ind] - vals).pow(2).mean()
                 # Backprop
-                p_loss += v_loss # no value loss weight applied
+                p_loss += self.vf_coef * v_loss
                 self.opt.zero_grad()
                 p_loss.backward()
                 if self.max_grad_norm > 0:
