@@ -1,17 +1,18 @@
 env_name: 'push-v3-goal-observable'
 env_type: 'metaworld'
-act_type: 'Tanh'
+act_type: 'ReLU'
 n_steps: 1e6
 g: 0.99
 lm: 0.95
 u_epi_ups: 0
-bs: 2048
+bs: 16384
 n_itrs: 10
-n_slices: 16
+n_slices: 64
 lr: 0.0003
 h_dim: [256, 256, 256]
 u_adv_scl: 1
 clip_eps: 0.2
+max_grad_norm: 0.5
 ob_norm: 0
 rew_norm: 0
 dir: 'data/metaworld/push/'
