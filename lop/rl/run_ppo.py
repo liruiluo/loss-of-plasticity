@@ -6,6 +6,7 @@ import subprocess
 import numpy as np
 
 import gym
+import numpy as np
 import torch
 from torch.optim import Adam
 from lop.algos.rl.buffer import Buffer
@@ -128,10 +129,11 @@ def main():
     env_type = cfg.get('env_type', 'gym')
 
     if env_type == 'metaworld':
-        # MetaWorld environments use the Gymnasium-style
-        # (obs, reward, terminated, truncated, info) API. Construct the
-        # environment from MetaWorld's registry and wrap it to match the
-        # older Gym interface expected in this script.
+        # MetaWorld environments use the Gymnasium-style API. We wrap them to:
+        # - enforce a time limit
+        # - surface terminal_observation in info on truncation/termination
+        # - keep a gym-style (obs, reward, done, info) signature
+        # - clip actions before stepping
         from metaworld import ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE
 
         if env_name not in ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE:
@@ -141,6 +143,15 @@ def main():
         # Ensure task randomization is not frozen
         if hasattr(base_env, "_freeze_rand_vec"):
             base_env._freeze_rand_vec = False
+
+        class TerminalObsWrapper(gym.Wrapper):
+            """Ensure terminal observation is always in info for truncated/terminated steps."""
+
+            def step(self, action):
+                obs, reward, terminated, truncated, info = self.env.step(action)
+                if terminated or truncated:
+                    info["terminal_observation"] = obs
+                return obs, reward, terminated, truncated, info
 
         class GymCompatEnv:
             def __init__(self, wrapped_env, seed_value=None):
@@ -160,14 +171,24 @@ def main():
                 return obs
 
             def step(self, action):
+                action = np.clip(action, self.action_space.low, self.action_space.high)
                 obs, reward, terminated, truncated, info = self.env.step(action)
                 done = bool(terminated or truncated)
+                info = dict(info)
+                info["terminated"] = bool(terminated)
+                info["truncated"] = bool(truncated)
                 return obs, reward, done, info
 
             def close(self):
                 return self.env.close()
 
-        env = GymCompatEnv(base_env, seed_value=seed)
+        wrapped = gym.wrappers.TimeLimit(
+            base_env,
+            max_episode_steps=int(cfg.get("max_episode_steps", 500)),
+        )
+        wrapped = TerminalObsWrapper(wrapped)
+        wrapped = gym.wrappers.RecordEpisodeStatistics(wrapped)
+        env = GymCompatEnv(wrapped, seed_value=seed)
     elif env_name in ['SlipperyAnt-v2', 'SlipperyAnt-v3']:
         # Import only when needed to avoid unnecessary mujoco_py build
         import lop.envs  # noqa: F401
@@ -282,6 +303,15 @@ def main():
     for step in range(start_step, n_steps):
         a, logp, dist, new_features = agent.get_action(o)
         op, r, done, infos = env.step(a)
+        if env_type == 'metaworld':
+            terminated = bool(infos.get('terminated', False)) if isinstance(infos, dict) else False
+            truncated = bool(infos.get('truncated', False)) if isinstance(infos, dict) else False
+            if truncated and not terminated:
+                with torch.no_grad():
+                    v_bootstrap = agent.learner.vf.value(
+                        torch.tensor(op, dtype=torch.float32, device=device).unsqueeze(0)
+                    ).item()
+                r = float(r + cfg['g'] * v_bootstrap)
         epi_steps += 1
         op_ = op
         val_logs = agent.log_update(o, a, r, op_, logp, dist, done)
