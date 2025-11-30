@@ -21,7 +21,7 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
 fi
 
 ALGOS=("std" "cbp")
-SEEDS=${SEEDS:-"0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19"}
+SEEDS=${SEEDS:-"0 1 2"}
 DEVICE=${DEVICE:-"cuda"}
 
 for algo in "${ALGOS[@]}"; do
@@ -35,4 +35,3 @@ for algo in "${ALGOS[@]}"; do
     "${PYTHON_BIN}" -m lop.rl.run_ppo -c "${CFG_PATH}" -s "${seed}" -d "${DEVICE}"
   done
 done
-
