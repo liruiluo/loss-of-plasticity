@@ -130,10 +130,10 @@ def main():
 
     if env_type == 'metaworld':
         # MetaWorld environments use the Gymnasium-style API. We wrap them to:
-        # - enforce a time limit
-        # - surface terminal_observation in info on truncation/termination
-        # - keep a gym-style (obs, reward, done, info) signature
-        # - clip actions before stepping
+        # - keep terminated/truncated flags in info
+        # - add terminal_observation on episode end
+        # - enforce an optional time limit (default 500)
+        # - clip actions and return old-Gym (obs, reward, done, info)
         from metaworld import ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE
 
         if env_name not in ALL_V3_ENVIRONMENTS_GOAL_OBSERVABLE:
@@ -144,14 +144,7 @@ def main():
         if hasattr(base_env, "_freeze_rand_vec"):
             base_env._freeze_rand_vec = False
 
-        class TerminalObsWrapper(gym.Wrapper):
-            """Ensure terminal observation is always in info for truncated/terminated steps."""
-
-            def step(self, action):
-                obs, reward, terminated, truncated, info = self.env.step(action)
-                if terminated or truncated:
-                    info["terminal_observation"] = obs
-                return obs, reward, terminated, truncated, info
+        max_episode_steps = int(cfg.get("max_episode_steps", 500))
 
         class GymCompatEnv:
             def __init__(self, wrapped_env, seed_value=None):
@@ -160,6 +153,7 @@ def main():
                 self.action_space = wrapped_env.action_space
                 self._seed = seed_value
                 self._reset_called = False
+                self._steps = 0
 
             def reset(self):
                 # For reproducibility, only pass the seed on the first reset.
@@ -168,27 +162,27 @@ def main():
                     self._reset_called = True
                 else:
                     obs, _ = self.env.reset()
+                self._steps = 0
                 return obs
 
             def step(self, action):
                 action = np.clip(action, self.action_space.low, self.action_space.high)
                 obs, reward, terminated, truncated, info = self.env.step(action)
+                self._steps += 1
+                if self._steps >= max_episode_steps:
+                    truncated = True
                 done = bool(terminated or truncated)
                 info = dict(info)
                 info["terminated"] = bool(terminated)
                 info["truncated"] = bool(truncated)
+                if done:
+                    info["terminal_observation"] = obs
                 return obs, reward, done, info
 
             def close(self):
                 return self.env.close()
 
-        wrapped = gym.wrappers.TimeLimit(
-            base_env,
-            max_episode_steps=int(cfg.get("max_episode_steps", 500)),
-        )
-        wrapped = TerminalObsWrapper(wrapped)
-        wrapped = gym.wrappers.RecordEpisodeStatistics(wrapped)
-        env = GymCompatEnv(wrapped, seed_value=seed)
+        env = GymCompatEnv(base_env, seed_value=seed)
     elif env_name in ['SlipperyAnt-v2', 'SlipperyAnt-v3']:
         # Import only when needed to avoid unnecessary mujoco_py build
         import lop.envs  # noqa: F401
@@ -368,6 +362,17 @@ def main():
                       pol_features_activity=pol_features_activity, stable_rank=stable_rank, mu=mu, pol_weights=pol_weights,
                       val_weights=val_weights, weight_change=weight_change, friction=friction,
                       num_updates=num_updates, previous_change_time=previous_change_time, successes=successes)
+            # 打印当前已完成的 episode 成功率和平均回报
+            ts = np.asarray(termination_steps, dtype=np.int64)
+            succ = np.asarray(successes, dtype=np.float32) if len(successes) > 0 else None
+            rets_arr = np.asarray(rets, dtype=np.float32) if len(rets) > 0 else None
+            n = min(ts.shape[0], succ.shape[0]) if succ is not None else 0
+            if n > 0 and rets_arr is not None and rets_arr.shape[0] >= n:
+                mask = ts[:n] <= step
+                if np.any(mask):
+                    current_success = float(succ[:n][mask].mean())
+                    current_return = float(rets_arr[:n][mask].mean())
+                    print(f"Step {step}: success={current_success:.3f}, return={current_return:.1f}")
 
     with open(cfg['done_path'], 'w') as f:
         f.write('All done!')

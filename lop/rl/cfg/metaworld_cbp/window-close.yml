@@ -1,0 +1,26 @@
+env_name: 'window-close-v3-goal-observable'
+env_type: 'metaworld'
+act_type: 'ReLU'
+n_steps: 1e6
+g: 0.99
+lm: 0.95
+u_epi_ups: 0
+bs: 16384
+n_itrs: 10
+n_slices: 64
+lr: 0.0003
+h_dim: [256, 256, 256]
+u_adv_scl: 1
+clip_eps: 0.2
+max_grad_norm: 0.5
+vf_coef: 0.5
+rr: 1e-4
+mt: 10000
+util_type_val: 'contribution'
+util_type_pol: 'contribution'
+ob_norm: 0
+rew_norm: 0
+dir: 'data/metaworld_cbp/window-close/'
+to_log: []
+label: 'PPO CBP window-close'
+
