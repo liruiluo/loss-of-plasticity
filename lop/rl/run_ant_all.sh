@@ -22,7 +22,7 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   PYTHON_BIN="python"
 fi
 
-ALGOS=("std" "ns" "l2" "cbp" "redo")
+ALGOS=("std")
 SEEDS=${SEEDS:-"0 1 2"}
 DEVICE=${DEVICE:-"cuda"}
 
